@@ -19,6 +19,8 @@ import {
   type OutputConfig,
 } from './subagent.js';
 import fs from 'node:fs';
+import path from 'node:path';
+import { homedir } from 'node:os';
 import {
   createAgentRuntimeState,
   type AgentRuntimeState,
@@ -160,6 +162,12 @@ export class SubagentOrchestrator {
       return await this.options.subagentManager.loadSubagent(name);
     } catch (error) {
       if (error instanceof Error) {
+        // Check if this is a "subagent not found" error
+        if (error.message.includes(`'${name}' not found`)) {
+          throw new Error(
+            `Unable to load subagent '${name}': Subagent not found. Use the list_subagents tool to discover available subagents before calling the task tool.`,
+          );
+        }
         throw new Error(`Unable to load subagent '${name}': ${error.message}`);
       }
       throw error;
@@ -337,18 +345,21 @@ export class SubagentOrchestrator {
 
     const authKey = profile.ephemeralSettings['auth-key'];
     if (typeof authKey === 'string') {
+      service.set('auth-key', authKey);
       service.set(`providers.${provider}.apiKey`, authKey);
     }
     const authKeyfile = this.getStringSetting(profile.ephemeralSettings, [
       'auth-keyfile',
     ]);
     if (authKeyfile) {
-      service.set('auth-keyfile', authKeyfile);
-      service.set(`providers.${provider}.apiKeyfile`, authKeyfile);
+      const expandedKeyfile = authKeyfile.replace(/^~(?=$|[\\/])/, homedir());
+      service.set('auth-keyfile', expandedKeyfile);
+      service.set(`providers.${provider}.apiKeyfile`, expandedKeyfile);
       if (!service.get(`providers.${provider}.apiKey`)) {
         try {
-          if (fs.existsSync(authKeyfile)) {
-            const content = fs.readFileSync(authKeyfile, 'utf8').trim();
+          const resolvedPath = path.resolve(expandedKeyfile);
+          if (fs.existsSync(resolvedPath)) {
+            const content = fs.readFileSync(resolvedPath, 'utf8').trim();
             if (content) {
               service.set(`providers.${provider}.apiKey`, content);
             }

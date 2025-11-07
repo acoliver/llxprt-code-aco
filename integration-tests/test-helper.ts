@@ -169,14 +169,65 @@ export class TestRig {
             ),
       },
       sandbox: env.GEMINI_SANDBOX !== 'false' ? env.GEMINI_SANDBOX : false,
-      selectedAuthType: 'none', // Explicitly set auth type to none for tests
+      selectedAuthType: 'provider', // Use provider-based auth (API keys)
       provider: env.LLXPRT_DEFAULT_PROVIDER, // No default - must be set explicitly
+      debug: true, // Enable debug logging
       ...options.settings, // Allow tests to override/add settings
     };
     writeFileSync(
       join(llxprtDir, 'settings.json'),
       JSON.stringify(settings, null, 2),
     );
+
+    const profileName = env.LLXPRT_TEST_PROFILE?.trim();
+    if (profileName) {
+      const profilesDir = join(llxprtDir, 'profiles');
+      mkdirSync(profilesDir, { recursive: true });
+
+      const profileProvider =
+        env.LLXPRT_DEFAULT_PROVIDER && env.LLXPRT_DEFAULT_PROVIDER.trim().length
+          ? env.LLXPRT_DEFAULT_PROVIDER
+          : 'openai';
+      const profileModel =
+        env.LLXPRT_DEFAULT_MODEL && env.LLXPRT_DEFAULT_MODEL.trim().length
+          ? env.LLXPRT_DEFAULT_MODEL
+          : 'gpt-4o-mini';
+
+      const ephemeralEntries: Array<[string, unknown]> = [];
+      if (env.OPENAI_BASE_URL && env.OPENAI_BASE_URL.trim().length > 0) {
+        ephemeralEntries.push(['base-url', env.OPENAI_BASE_URL]);
+      }
+      if (env.OPENAI_API_KEY && env.OPENAI_API_KEY.trim().length > 0) {
+        ephemeralEntries.push(['auth-key', env.OPENAI_API_KEY]);
+      }
+      if (env.LLXPRT_TEST_PROFILE_KEYFILE) {
+        ephemeralEntries.push([
+          'auth-keyfile',
+          env.LLXPRT_TEST_PROFILE_KEYFILE,
+        ]);
+      }
+      if (env.LLXPRT_CONTEXT_LIMIT) {
+        const parsedLimit = Number(env.LLXPRT_CONTEXT_LIMIT);
+        if (Number.isFinite(parsedLimit) && parsedLimit > 0) {
+          ephemeralEntries.push(['context-limit', parsedLimit]);
+        }
+      }
+
+      const profile = {
+        version: 1,
+        provider: profileProvider,
+        model: profileModel,
+        modelParams: {},
+        ephemeralSettings: Object.fromEntries(
+          ephemeralEntries.filter(([, value]) => value !== undefined),
+        ),
+      };
+
+      writeFileSync(
+        join(profilesDir, `${profileName}.json`),
+        JSON.stringify(profile, null, 2),
+      );
+    }
   }
 
   createFile(fileName: string, content: string) {
@@ -208,6 +259,16 @@ export class TestRig {
     const model = env.LLXPRT_DEFAULT_MODEL;
     const baseUrl = env.OPENAI_BASE_URL;
     const apiKey = env.OPENAI_API_KEY;
+
+    // Debug: Log environment variables in CI
+    if (env.CI === 'true' || env.VERBOSE === 'true') {
+      console.log('[TestRig] Environment variables:', {
+        provider,
+        model,
+        baseUrl: baseUrl ? `${baseUrl.substring(0, 30)}...` : 'UNDEFINED',
+        hasApiKey: !!apiKey,
+      });
+    }
 
     // Fail fast if required configuration is missing
     if (!provider) {
@@ -296,7 +357,21 @@ export class TestRig {
     // Add any additional args
     commandArgs.push(...args);
 
+    if (env.LLXPRT_TEST_PROFILE?.trim()) {
+      commandArgs.push('--profile-load', env.LLXPRT_TEST_PROFILE.trim());
+    }
+
     const node = commandArgs.shift() as string;
+
+    // Debug: Log command being executed in CI
+    if (env.CI === 'true' || env.VERBOSE === 'true') {
+      console.log('[TestRig] Spawning command:', {
+        node,
+        args: commandArgs,
+        hasBaseUrl: commandArgs.includes('--baseurl'),
+        baseUrlIndex: commandArgs.indexOf('--baseurl'),
+      });
+    }
 
     const child = spawn(node, commandArgs as string[], {
       cwd: this.testDir!,
@@ -504,7 +579,7 @@ export class TestRig {
             const logData = JSON.parse(jsonStr);
             if (
               logData.attributes &&
-              logData.attributes['event.name'] === `gemini_cli.${eventName}`
+              logData.attributes['event.name'] === `llxprt_code.${eventName}`
             ) {
               return true;
             }
@@ -685,7 +760,7 @@ export class TestRig {
                 }
               } else if (
                 obj.attributes &&
-                obj.attributes['event.name'] === 'llxprt_cli.tool_call'
+                obj.attributes['event.name'] === 'llxprt_code.tool_call'
               ) {
                 logs.push({
                   timestamp: obj.attributes['event.timestamp'],
@@ -831,7 +906,7 @@ export class TestRig {
         const logData = JSON.parse(jsonStr);
         if (
           logData.attributes &&
-          logData.attributes['event.name'] === 'gemini_cli.api_request'
+          logData.attributes['event.name'] === 'llxprt_code.api_request'
         ) {
           lastApiRequest = logData;
         }

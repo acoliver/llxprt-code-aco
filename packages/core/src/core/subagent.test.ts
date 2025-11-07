@@ -75,6 +75,9 @@ vi.mock('./contentGenerator.js', async (importOriginal) => {
 vi.mock('../utils/environmentContext.js');
 vi.mock('./nonInteractiveToolExecutor.js');
 vi.mock('../ide/ide-client.js');
+vi.mock('./prompts.js', () => ({
+  getCoreSystemPromptAsync: vi.fn().mockResolvedValue('Core Prompt'),
+}));
 
 async function createMockConfig(
   toolRegistryMocks = {},
@@ -964,7 +967,7 @@ describe('subagent.ts', () => {
           'you MUST emit the required output variables',
         );
         expect(systemInstruction).toContain(
-          "Use 'self.emitvalue' to emit the 'result1' key",
+          "Use 'self_emitvalue' to emit the 'result1' key",
         );
       });
 
@@ -999,8 +1002,9 @@ describe('subagent.ts', () => {
         const generationConfig = getGenerationConfigFromMock();
         const history = callArgs[3];
 
-        // Environment context should now be in system instruction, not undefined
-        expect(generationConfig.systemInstruction).toBe('Env Context');
+        const systemInstruction = generationConfig.systemInstruction as string;
+        // Environment context should now be in system instruction
+        expect(systemInstruction).toContain('Env Context');
         // History should only contain initialMessages, not environment context
         expect(history).toEqual([...initialMessages]);
       });
@@ -1147,7 +1151,7 @@ describe('subagent.ts', () => {
         expect(scope.output.terminate_reason).toBe(SubagentTerminateMode.GOAL);
       });
 
-      it('should handle self.emitvalue and terminate with GOAL when outputs are met', async () => {
+      it('should handle self_emitvalue and terminate with GOAL when outputs are met', async () => {
         const { config } = await createMockConfig();
         const outputConfig: OutputConfig = {
           outputs: { result: 'The final result' },
@@ -1159,7 +1163,7 @@ describe('subagent.ts', () => {
           createMockStream([
             [
               {
-                name: 'self.emitvalue',
+                name: 'self_emitvalue',
                 args: {
                   emit_variable_name: 'result',
                   emit_variable_value: 'Success!',
@@ -1478,7 +1482,7 @@ describe('subagent.ts', () => {
             'stop',
             [
               {
-                name: 'self.emitvalue',
+                name: 'self_emitvalue',
                 args: {
                   emit_variable_name: 'required_var',
                   emit_variable_value: 'Here it is',
@@ -1532,20 +1536,20 @@ describe('subagent.ts', () => {
           createMockStream([
             [
               {
-                name: 'self.emitvalue',
+                name: 'self_emitvalue',
                 args: { emit_variable_name: 'loop', emit_variable_value: 'v1' },
               },
             ],
             [
               {
-                name: 'self.emitvalue',
+                name: 'self_emitvalue',
                 args: { emit_variable_name: 'loop', emit_variable_value: 'v2' },
               },
             ],
             // This turn should not happen
             [
               {
-                name: 'self.emitvalue',
+                name: 'self_emitvalue',
                 args: { emit_variable_name: 'loop', emit_variable_value: 'v3' },
               },
             ],

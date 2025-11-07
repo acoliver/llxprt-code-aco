@@ -43,13 +43,6 @@ export class ComplexityAnalyzer {
   private readonly minTasksForSuggestion: number;
   private analysisHistory: ComplexityAnalysisResult[] = [];
 
-  // Patterns for detecting list items
-  private readonly listPatterns = [
-    /^\s*\d+\.\s+(.+)$/gm, // Numbered lists: "1. Task"
-    /^\s*[-•*]\s+(.+)$/gm, // Bullet points: "- Task", "• Task", "* Task"
-    /^\s*\[[\s\]]\]\s+(.+)$/gm, // Checkboxes: "[ ] Task"
-  ];
-
   // Sequential keywords that indicate multi-step processes
   private readonly sequentialKeywords = [
     'first',
@@ -152,34 +145,38 @@ export class ComplexityAnalyzer {
    */
   private extractTasks(message: string): string[] {
     const tasks: string[] = [];
+    const addTask = (raw: string) => {
+      const normalized = this.normalizeTaskText(raw);
+      if (normalized.length > 0 && !tasks.includes(normalized)) {
+        tasks.push(normalized);
+      }
+    };
 
-    // Check for list patterns
-    for (const pattern of this.listPatterns) {
-      const matches = [...message.matchAll(pattern)];
-      for (const match of matches) {
-        const task = match[1].trim();
-        if (task && !tasks.includes(task)) {
-          tasks.push(task);
-        }
+    for (const line of message.split(/\r?\n/)) {
+      const extracted = this.extractListTaskFromLine(line);
+      if (extracted) {
+        addTask(extracted);
       }
     }
 
-    // If no list patterns found, check for comma-separated tasks
+    // If no list-style tasks found, check for comma-separated tasks
     if (tasks.length === 0) {
       // Look for patterns like "I need to X, Y, and Z"
       const needToPattern =
-        /(?:need to|want to|have to|should|must|will)\s+(.+?)(?:\.|$)/i;
+        /(?:need to|want to|have to|should|must|will)\s+([^\r\n.?!]+)/i;
       const match = message.match(needToPattern);
 
       if (match) {
         const taskString = match[1];
         const potentialTasks = taskString
           .split(this.taskSeparatorPattern)
-          .map((t) => t.trim())
+          .map((t) => this.normalizeTaskText(t))
           .filter((t) => t.length > 3 && !t.includes('?'));
 
         if (potentialTasks.length >= 2) {
-          tasks.push(...potentialTasks);
+          for (const task of potentialTasks) {
+            addTask(task);
+          }
         }
       }
     }
@@ -212,9 +209,9 @@ export class ComplexityAnalyzer {
               /(?:first,?\s*|then\s*|after that,?\s*|finally,?\s*)?(.+)/i,
             );
             if (actionMatch) {
-              const task = actionMatch[1].trim();
-              if (task && !tasks.includes(task)) {
-                tasks.push(task);
+              const task = this.normalizeTaskText(actionMatch[1]);
+              if (task.length > 0 && !tasks.includes(task)) {
+                addTask(task);
               }
             }
           }
@@ -302,6 +299,71 @@ export class ComplexityAnalyzer {
     }
 
     return sentences.length >= 5;
+  }
+
+  private extractListTaskFromLine(line: string): string | null {
+    const trimmed = line.trimStart();
+    if (trimmed.length === 0) {
+      return null;
+    }
+
+    const firstChar = trimmed[0];
+
+    if (firstChar === '[') {
+      const closingIndex = trimmed.indexOf(']');
+      if (closingIndex >= 0 && closingIndex + 1 < trimmed.length) {
+        const remainder = trimmed.slice(closingIndex + 1).trimStart();
+        if (remainder.length > 0) {
+          return remainder;
+        }
+      }
+    }
+
+    if (
+      (firstChar === '-' || firstChar === '*' || firstChar === '•') &&
+      trimmed.length > 1 &&
+      this.isWhitespaceChar(trimmed[1])
+    ) {
+      let index = 1;
+      while (index < trimmed.length && this.isWhitespaceChar(trimmed[index])) {
+        index += 1;
+      }
+      const remainder = trimmed.slice(index);
+      if (remainder.length > 0) {
+        return remainder;
+      }
+    }
+
+    const dotIndex = trimmed.indexOf('.');
+    if (dotIndex > 0 && this.isAllDigits(trimmed.slice(0, dotIndex))) {
+      const remainder = trimmed.slice(dotIndex + 1).trimStart();
+      if (remainder.length > 0) {
+        return remainder;
+      }
+    }
+
+    return null;
+  }
+
+  private isAllDigits(value: string): boolean {
+    if (value.length === 0) {
+      return false;
+    }
+    for (let i = 0; i < value.length; i += 1) {
+      const code = value.charCodeAt(i);
+      if (code < 48 || code > 57) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private normalizeTaskText(value: string): string {
+    return value.trim().replace(/\s+/g, ' ');
+  }
+
+  private isWhitespaceChar(character: string): boolean {
+    return character.trim().length === 0;
   }
 
   /**

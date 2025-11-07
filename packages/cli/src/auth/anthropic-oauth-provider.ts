@@ -21,11 +21,13 @@ import {
   RetryHandler,
   DebugLogger,
 } from '@vybestack/llxprt-code-core';
-import { HistoryItemWithoutId } from '../ui/types.js';
+import { ClipboardService } from '../services/ClipboardService.js';
+import { HistoryItemWithoutId, HistoryItemOAuthURL } from '../ui/types.js';
 import {
   LocalOAuthCallbackServer,
   startLocalOAuthCallback,
 } from './local-oauth-callback.js';
+import { globalOAuthUI } from './global-oauth-ui.js';
 
 enum InitializationState {
   NotStarted = 'not-started',
@@ -207,9 +209,6 @@ export class AnthropicOAuthProvider implements OAuthProvider {
           }
         }
 
-        console.log('\nAnthropic Claude OAuth Authentication');
-        console.log('─'.repeat(40));
-
         let authUrl =
           deviceCodeResponse.verification_uri_complete ||
           `${deviceCodeResponse.verification_uri}?user_code=${deviceCodeResponse.user_code}`;
@@ -220,23 +219,39 @@ export class AnthropicOAuthProvider implements OAuthProvider {
           );
         }
 
+        // Always show the auth URL in the TUI first, before attempting browser (like Gemini does)
+        const message = `Please visit the following URL to authorize with Anthropic Claude:\\n${authUrl}`;
+        const historyItem: HistoryItemOAuthURL = {
+          type: 'oauth_url',
+          text: message,
+          url: authUrl,
+        };
+        // Try instance addItem first, fallback to global
+        const addItem = this.addItem || globalOAuthUI.getAddItem();
+        if (addItem) {
+          addItem(historyItem, Date.now());
+        }
+
+        console.log('Visit the following URL to authorize:');
+        console.log(authUrl);
+
+        // Copy URL to clipboard with error handling
+        try {
+          await ClipboardService.copyToClipboard(authUrl);
+        } catch (error) {
+          // Clipboard copy is non-critical, continue without it
+          console.debug('Failed to copy URL to clipboard:', error);
+        }
+
         if (interactive) {
           console.log('Opening browser for authentication...');
-
-          this.showAuthMessage(authUrl);
 
           try {
             await openBrowserSecurely(authUrl);
           } catch (error) {
-            console.log('Failed to open browser automatically.');
             this.logger.debug(() => `Browser launch error: ${error}`);
-            this.showAuthMessage(authUrl);
           }
-        } else {
-          this.showAuthMessage(authUrl);
         }
-
-        console.log('─'.repeat(40));
 
         if (localCallback) {
           try {
@@ -251,9 +266,6 @@ export class AnthropicOAuthProvider implements OAuthProvider {
                 `Local OAuth callback failed: ${
                   error instanceof Error ? error.message : String(error)
                 }`,
-            );
-            console.log(
-              'Falling back to manual authorization code entry. Please paste the code when prompted.',
             );
           }
         }
@@ -324,29 +336,14 @@ export class AnthropicOAuthProvider implements OAuthProvider {
           }
         }
 
-        console.log('Successfully authenticated with Anthropic Claude!');
+        this.logger.debug(
+          () => 'Successfully authenticated with Anthropic Claude!',
+        );
       },
       this.name,
       'completeAuth',
     )();
   }
-
-  private showAuthMessage(authUrl: string): void {
-    const message = `Please visit the following URL to authorize with Anthropic Claude:\n${authUrl}`;
-    if (this.addItem) {
-      this.addItem(
-        {
-          type: 'info',
-          text: message,
-        },
-        Date.now(),
-      );
-    } else {
-      console.log('Visit the following URL to authorize:');
-      console.log(authUrl);
-    }
-  }
-
   /**
    * @plan PLAN-20250823-AUTHFIXES.P08
    * @requirement REQ-001.1
@@ -538,7 +535,7 @@ export class AnthropicOAuthProvider implements OAuthProvider {
     }
 
     // @pseudocode line 112: Log successful logout
-    console.log('Logged out of Anthropic Claude');
+    this.logger.debug(() => 'Logged out of Anthropic Claude');
   }
 
   /**
